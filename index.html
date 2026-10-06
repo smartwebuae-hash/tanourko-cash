@@ -30,6 +30,19 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;fl
 .banner{background:#fff4d6;border:1px solid #ecd48a;color:#6b5314;padding:10px 12px;border-radius:8px;font-size:.88rem;margin-bottom:14px}
 
 /* الملخص */
+.hold{background:var(--ink);color:#fff;border-radius:16px;padding:16px 18px;margin-bottom:12px}
+.hold .lbl{font-size:.88rem;opacity:.85}
+.hold .big{font-size:2.2rem;font-weight:700;line-height:1.15;color:#FFC79A}
+.hold .sub{font-size:.8rem;opacity:.8;margin-top:2px}
+.hold .actions{margin-top:12px}
+.hold .btn{background:#fff;color:var(--ink)}
+.hof{background:rgba(255,255,255,.08);border-radius:12px;padding:10px;margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.hof input{margin:0;padding:9px}
+.hof .full{grid-column:1/-1}
+.hof label.pk{display:flex;align-items:center;gap:6px;justify-content:center;border:1px dashed rgba(255,255,255,.4);border-radius:8px;padding:8px;font-size:.85rem;color:#fff;cursor:pointer}
+.hlist{margin-top:10px;font-size:.84rem}
+.hlist div{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid rgba(255,255,255,.12)}
+.hlist button{background:none;border:0;color:#ffb4ab;cursor:pointer;font-size:15px}
 .hero{background:linear-gradient(135deg,var(--brand),var(--brand-d));color:#fff;border-radius:16px;padding:18px;margin-bottom:16px}
 .hero .lbl{font-size:.88rem;opacity:.9}
 .hero .big{font-size:2.3rem;font-weight:700;line-height:1.15;margin:2px 0 4px}
@@ -162,6 +175,22 @@ input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--brand);o
   </header>
   <div class="banner" id="demo" hidden>وضع التجربة: البيانات لا تُحفظ بعد إغلاق الصفحة.</div>
 
+  <section class="hold" aria-label="المبلغ بحوزتك">
+    <div class="lbl">💰 إجمالي المبلغ اللي بحوزتك الآن</div>
+    <div class="big"><span class="n" id="hNow">0.00</span> <small style="font-size:1rem;color:#fff">درهم</small></div>
+    <div class="sub" id="hSub">مجموع الكاش الفعلي المستلم − المبالغ المسلّمة</div>
+    <div class="actions"><button class="btn" type="button" id="hBtn">📤 تسليم مبلغ (إيداع بنك / للمالك)</button></div>
+    <div class="hof" id="hForm" hidden>
+      <input type="date" id="hDate" aria-label="تاريخ التسليم">
+      <input type="number" id="hAmt" step="0.01" min="0" inputmode="decimal" placeholder="المبلغ المسلّم" aria-label="المبلغ">
+      <input class="full" id="hTo" list="hToList" placeholder="سلّمته لمين؟ (إيداع بنك، المالك…)" aria-label="المستلم"><datalist id="hToList"><option value="إيداع بنك"><option value="المالك"><option value="المدير"></datalist>
+      <input class="full" id="hNote" placeholder="ملاحظة (اختياري)" aria-label="ملاحظة">
+      <label class="pk full">🧾 <span id="hImgLbl">إرفاق إيصال الإيداع أو التسليم</span><input type="file" id="hImg" accept="image/*" hidden></label>
+      <div class="actions full" style="margin-top:0"><button class="btn" type="button" id="hSave">حفظ التسليم</button><button class="btn ghost" type="button" id="hCancel" style="background:transparent;color:#fff;border-color:rgba(255,255,255,.4)">إلغاء</button></div>
+    </div>
+    <div class="hlist" id="hList"></div>
+  </section>
+
   <section class="hero" aria-label="ملخص الشهر">
     <div class="lbl">مجموع النقص هذا الشهر</div>
     <div class="big"><span class="n" id="tShort">0.00</span> <small style="font-size:1rem">درهم</small></div>
@@ -244,6 +273,8 @@ const iso = d => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+
 const dmy = s => {const [y,m,d]=s.split("-");return `${+d}/${+m}/${y}`};
 
 let db=null, memory=[], entries=[], editingId=null, photos=[], removed=[], reasons=[];
+let allActual=0, handovers=[], memHand=[], hFile=null;
+const HTABLE="cash_handovers";
 const now=new Date(); let viewY=now.getFullYear(), viewM=now.getMonth();
 
 let toastT;
@@ -263,8 +294,54 @@ async function load(){
     if(error){toast("تعذّر التحميل: "+error.message);return}
     entries=data||[];
   } else entries=memory.filter(e=>e.entry_date>=from&&e.entry_date<=to).sort((a,b)=>b.entry_date.localeCompare(a.entry_date));
-  render();
+  render(); loadHold();
 }
+async function loadHold(){
+  if(db){
+    const [a,b]=await Promise.all([db.from(TABLE).select("actual"),db.from(HTABLE).select("*").order("h_date",{ascending:false}).order("id",{ascending:false})]);
+    allActual=(a.data||[]).reduce((s,x)=>s+(+x.actual||0),0);
+    if(b.error){ handovers=[]; $("hSub").textContent="شغّل كود جدول التسليمات في Supabase لتفعيل التسليم"; }
+    else handovers=b.data||[];
+  } else { allActual=memory.reduce((s,x)=>s+(+x.actual||0),0); handovers=memHand.slice().sort((x,y)=>y.h_date.localeCompare(x.h_date)); }
+  renderHold();
+}
+function renderHold(){
+  const given=handovers.reduce((s,x)=>s+(+x.amount||0),0), nowAmt=allActual-given;
+  $("hNow").textContent=fmt(nowAmt);
+  if(!/شغّل/.test($("hSub").textContent)) $("hSub").textContent=`استلمت ${fmt(allActual)} − سلّمت ${fmt(given)}`;
+  const mFrom=`${viewY}-${String(viewM+1).padStart(2,"0")}-01`, mTo=iso(new Date(viewY,viewM+1,0));
+  const mh=handovers.filter(x=>x.h_date>=mFrom&&x.h_date<=mTo);
+  $("hList").innerHTML=mh.length?`<div style="border:0;opacity:.8">التسليمات في ${months[viewM]}:</div>`+mh.map(x=>`<div><span>${dmy(x.h_date)} — ${esc(x.receiver||"")}${x.note?` · ${esc(x.note)}`:""}${x.img?` · <a href="${x.img}" target="_blank" rel="noopener" style="color:#FFC79A">🧾</a>`:""}</span><span><b class="n">${fmt(x.amount)}</b> <button type="button" data-hd="${x.id}" aria-label="حذف التسليم">×</button></span></div>`).join(""):"";
+  $("hList").querySelectorAll("[data-hd]").forEach(b=>b.onclick=async()=>{
+    if(!confirm("حذف هذا التسليم؟")) return;
+    if(db){const {error}=await db.from(HTABLE).delete().eq("id",b.dataset.hd); if(error){toast("لم يتم الحذف: "+error.message);return}}
+    else memHand=memHand.filter(x=>String(x.id)!==b.dataset.hd);
+    loadHold();
+  });
+}
+$("hBtn").onclick=()=>{$("hForm").hidden=!$("hForm").hidden; $("hDate").value=iso(new Date()); $("hAmt").focus()};
+$("hCancel").onclick=()=>{$("hForm").hidden=true;hFile=null;$("hImgLbl").textContent="إرفاق إيصال الإيداع أو التسليم"};
+$("hImg").onchange=ev=>{hFile=ev.target.files[0]||null;$("hImgLbl").textContent=hFile?"✓ تم اختيار الإيصال":"إرفاق إيصال الإيداع أو التسليم"};
+$("hSave").onclick=async()=>{
+  const amt=+$("hAmt").value, to=$("hTo").value.trim();
+  if(!(amt>0)){toast("اكتب المبلغ المسلّم");return}
+  if(!to){toast("اكتب لمين سلّمت المبلغ");return}
+  const btn=$("hSave"); btn.disabled=true; btn.textContent="جاري الحفظ…";
+  try{
+    let img="";
+    if(hFile&&db){
+      const blob=await compress(hFile), path=`cash/handover/${$("hDate").value}-${Date.now()}.jpg`;
+      const {error}=await db.storage.from(BUCKET).upload(path,blob,{contentType:"image/jpeg"});
+      if(!error) img=db.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+    }
+    const rec={h_date:$("hDate").value,amount:Math.round(amt*100)/100,receiver:to,note:$("hNote").value.trim(),img};
+    if(db){const {error}=await db.from(HTABLE).insert(rec); if(error){toast("لم يتم الحفظ: "+error.message);return}}
+    else memHand.push({id:Date.now(),...rec});
+    toast(`تم تسليم ${fmt(amt)} درهم إلى ${to}`);
+    $("hAmt").value="";$("hTo").value="";$("hNote").value="";hFile=null;$("hImgLbl").textContent="إرفاق إيصال الإيداع أو التسليم";$("hForm").hidden=true;
+    loadHold();
+  } finally { btn.disabled=false; btn.textContent="حفظ التسليم"; }
+};
 
 const diffOf = e => (+e.actual||0)-(+e.expected||0);
 const explOf = e => (e.reasons||[]).reduce((s,r)=>s+(+r.amount||0),0);
@@ -431,6 +508,9 @@ function buildSheet(){
       <div>الباقي بدون سبب<b class="p" style="color:var(--short)">${fmt(s.left)}</b></div>
       <div>أيام النقص<b>${s.shDays} من ${entries.length}</b></div>
     </div>
+    ${(()=>{const mFrom=`${viewY}-${String(viewM+1).padStart(2,"0")}-01`,mTo=iso(new Date(viewY,viewM+1,0));const mh=handovers.filter(x=>x.h_date>=mFrom&&x.h_date<=mTo);const given=handovers.reduce((a,x)=>a+(+x.amount||0),0);
+      return (mh.length?`<div class="det"><h4>المبالغ المسلّمة هذا الشهر</h4><table><thead><tr><th style="width:15%">التاريخ</th><th>سلّمت إلى</th><th style="width:30%">ملاحظة</th><th style="width:16%">المبلغ</th></tr></thead><tbody>${mh.map(x=>`<tr><td>${dmy(x.h_date)}</td><td>${esc(x.receiver||"")}</td><td class="l">${esc(x.note||"")}</td><td><span class="p">${fmt(x.amount)}</span></td></tr>`).join("")}<tr class="tot"><td colspan="3">مجموع المسلّم هذا الشهر</td><td><span class="p">${fmt(mh.reduce((a,x)=>a+(+x.amount||0),0))}</span></td></tr></tbody></table></div>`:"")+
+      `<div class="box" style="grid-template-columns:1fr"><div style="background:#FFF1E6">💰 إجمالي المبلغ الموجود بحوزة المحاسب حتى تاريخه<b class="p" style="font-size:20px">${fmt(allActual-given)}</b></div></div>`})()}
     <div class="sig"><span>توقيع الكاشير: ............</span><span>توقيع المحاسب: ............</span><span>توقيع المدير: ............</span></div>`;
 }
 const repName=ext=>`تقرير_الكاش_تنوركو_${months[viewM]}_${viewY}${$("rOnlyShort").checked?"_النقص":""}.${ext}`;
