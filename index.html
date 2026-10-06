@@ -178,7 +178,7 @@ input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--brand);o
   <section class="hold" aria-label="المبلغ بحوزتك">
     <div class="lbl">💰 إجمالي المبلغ اللي بحوزتك الآن</div>
     <div class="big"><span class="n" id="hNow">0.00</span> <small style="font-size:1rem;color:#fff">درهم</small></div>
-    <div class="sub" id="hSub">مجموع الكاش الفعلي المستلم − المبالغ المسلّمة</div>
+    <div class="sub" id="hSub">كاش النظام − النقص − المبالغ المسلّمة</div>
     <div class="actions"><button class="btn" type="button" id="hBtn">📤 تسليم مبلغ (إيداع بنك / للمالك)</button></div>
     <div class="hof" id="hForm" hidden>
       <input type="date" id="hDate" aria-label="تاريخ التسليم">
@@ -273,7 +273,7 @@ const iso = d => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+
 const dmy = s => {const [y,m,d]=s.split("-");return `${+d}/${+m}/${y}`};
 
 let db=null, memory=[], entries=[], editingId=null, photos=[], removed=[], reasons=[];
-let allActual=0, handovers=[], memHand=[], hFile=null;
+let allActual=0, allExp=0, allShort=0, allOver=0, handovers=[], memHand=[], hFile=null;
 const HTABLE="cash_handovers";
 const now=new Date(); let viewY=now.getFullYear(), viewM=now.getMonth();
 
@@ -298,17 +298,24 @@ async function load(){
 }
 async function loadHold(){
   if(db){
-    const [a,b]=await Promise.all([db.from(TABLE).select("actual"),db.from(HTABLE).select("*").order("h_date",{ascending:false}).order("id",{ascending:false})]);
-    allActual=(a.data||[]).reduce((s,x)=>s+(+x.actual||0),0);
+    let [a,b]=await Promise.all([db.from(TABLE).select("expected,actual,reasons"),db.from(HTABLE).select("*").order("h_date",{ascending:false}).order("id",{ascending:false})]);
+    if(a.error) a=await db.from(TABLE).select("expected,actual");
+    calcHold(a.data||[]);
     if(b.error){ handovers=[]; $("hSub").textContent="شغّل كود جدول التسليمات في Supabase لتفعيل التسليم"; }
     else handovers=b.data||[];
-  } else { allActual=memory.reduce((s,x)=>s+(+x.actual||0),0); handovers=memHand.slice().sort((x,y)=>y.h_date.localeCompare(x.h_date)); }
+  } else { calcHold(memory); handovers=memHand.slice().sort((x,y)=>y.h_date.localeCompare(x.h_date)); }
   renderHold();
+}
+function calcHold(rows){
+  allExp=0; allShort=0; allOver=0;
+  rows.forEach(x=>{const e=+x.expected||0,a=+x.actual||0,d=a-e,ex=(x.reasons||[]).reduce((s,r)=>s+(+r.amount||0),0);
+    allExp+=e; allShort+=Math.max(d<0?-d:0,ex); if(d>0) allOver+=d;});
+  allActual=allExp-allShort+allOver;
 }
 function renderHold(){
   const given=handovers.reduce((s,x)=>s+(+x.amount||0),0), nowAmt=allActual-given;
   $("hNow").textContent=fmt(nowAmt);
-  if(!/شغّل/.test($("hSub").textContent)) $("hSub").textContent=`استلمت ${fmt(allActual)} − سلّمت ${fmt(given)}`;
+  if(!/شغّل/.test($("hSub").textContent)) $("hSub").textContent=`كاش النظام ${fmt(allExp)} − النقص ${fmt(allShort)}${allOver?` + الزيادة ${fmt(allOver)}`:""} − المسلّم ${fmt(given)}`;
   const mFrom=`${viewY}-${String(viewM+1).padStart(2,"0")}-01`, mTo=iso(new Date(viewY,viewM+1,0));
   const mh=handovers.filter(x=>x.h_date>=mFrom&&x.h_date<=mTo);
   $("hList").innerHTML=mh.length?`<div style="border:0;opacity:.8">التسليمات في ${months[viewM]}:</div>`+mh.map(x=>`<div><span>${dmy(x.h_date)} — ${esc(x.receiver||"")}${x.note?` · ${esc(x.note)}`:""}${x.img?` · <a href="${x.img}" target="_blank" rel="noopener" style="color:#FFC79A">🧾</a>`:""}</span><span><b class="n">${fmt(x.amount)}</b> <button type="button" data-hd="${x.id}" aria-label="حذف التسليم">×</button></span></div>`).join(""):"";
@@ -394,6 +401,8 @@ function updateReasonsSum(){
   const ex=reasons.reduce((s,r)=>s+(+r.amount||0),0), left=Math.max(0,sh-ex);
   $("rsShort").textContent=fmt(sh); $("rsExpl").textContent=fmt(ex); $("rsLeft").textContent=fmt(left);
   $("rsLeftBox").classList.toggle("done",sh>0&&left<0.005);
+  $("rsLeftBox").firstChild.textContent=ex>sh+0.004?"زيادة الأسباب":"الباقي";
+  if(ex>sh+0.004) $("rsLeft").textContent=fmt(ex-sh);
 }
 $("rsAdd").onclick=()=>{reasons.push({what:"",amount:"",receiver:"",img:""});drawReasons();$("rsRows").lastElementChild.querySelector("input").focus()};
 
@@ -510,7 +519,7 @@ function buildSheet(){
     </div>
     ${(()=>{const mFrom=`${viewY}-${String(viewM+1).padStart(2,"0")}-01`,mTo=iso(new Date(viewY,viewM+1,0));const mh=handovers.filter(x=>x.h_date>=mFrom&&x.h_date<=mTo);const given=handovers.reduce((a,x)=>a+(+x.amount||0),0);
       return (mh.length?`<div class="det"><h4>المبالغ المسلّمة هذا الشهر</h4><table><thead><tr><th style="width:15%">التاريخ</th><th>سلّمت إلى</th><th style="width:30%">ملاحظة</th><th style="width:16%">المبلغ</th></tr></thead><tbody>${mh.map(x=>`<tr><td>${dmy(x.h_date)}</td><td>${esc(x.receiver||"")}</td><td class="l">${esc(x.note||"")}</td><td><span class="p">${fmt(x.amount)}</span></td></tr>`).join("")}<tr class="tot"><td colspan="3">مجموع المسلّم هذا الشهر</td><td><span class="p">${fmt(mh.reduce((a,x)=>a+(+x.amount||0),0))}</span></td></tr></tbody></table></div>`:"")+
-      `<div class="box" style="grid-template-columns:1fr"><div style="background:#FFF1E6">💰 إجمالي المبلغ الموجود بحوزة المحاسب حتى تاريخه<b class="p" style="font-size:20px">${fmt(allActual-given)}</b></div></div>`})()}
+      `<div class="box" style="grid-template-columns:1fr"><div style="background:#FFF1E6">💰 إجمالي المبلغ الموجود بحوزة المحاسب حتى تاريخه<b class="p" style="font-size:20px">${fmt(allActual-given)}</b><span style="font-size:12px;color:#7a5a46">كاش النظام ${fmt(allExp)} − النقص ${fmt(allShort)}${allOver?` + الزيادة ${fmt(allOver)}`:""} − المسلّم ${fmt(given)}</span></div></div>`})()}
     <div class="sig"><span>توقيع الكاشير: ............</span><span>توقيع المحاسب: ............</span><span>توقيع المدير: ............</span></div>`;
 }
 const repName=ext=>`تقرير_الكاش_تنوركو_${months[viewM]}_${viewY}${$("rOnlyShort").checked?"_النقص":""}.${ext}`;
